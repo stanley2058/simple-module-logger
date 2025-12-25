@@ -1,5 +1,5 @@
 {
-  "name": "simple-module-logger",
+  "name": "@stanley2058/simple-module-logger",
   "version": "0.0.1",
   "license": "MIT",
   "module": "src/index.ts",
@@ -14,6 +14,10 @@
     "LICENSE",
     "package.json"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stanley2058/simple-module-logger.git"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.mts",
