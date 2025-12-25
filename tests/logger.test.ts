@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { Logger, type WriteStream } from "./logger";
+import { Logger, type WriteStream } from "../src/logger";
 
 // Helper to create a mock stream that captures output
 function createMockStream(): WriteStream & { output: string; lines: string[] } {
@@ -105,8 +105,16 @@ describe("Logger", () => {
       const stdout1 = createMockStream();
       const stdout2 = createMockStream();
 
-      const logger1 = new Logger({ logLevel: "debug", stdout: stdout1, stderr });
-      const logger2 = new Logger({ logLevel: "debug", stdout: stdout2, stderr });
+      const logger1 = new Logger({
+        logLevel: "debug",
+        stdout: stdout1,
+        stderr,
+      });
+      const logger2 = new Logger({
+        logLevel: "debug",
+        stdout: stdout2,
+        stderr,
+      });
 
       logger1.logInfo("test message");
       logger2.info("test message");
