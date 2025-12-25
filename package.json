@@ -8,6 +8,12 @@
     "build": "tsdown",
     "test": "bun test"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.mts",
