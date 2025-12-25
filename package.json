@@ -1,11 +1,22 @@
 {
   "name": "simple-module-logger",
-  "module": "index.ts",
+  "version": "0.0.1",
+  "license": "MIT",
+  "module": "src/index.ts",
   "type": "module",
-  "devDependencies": {
-    "@types/bun": "latest"
+  "scripts": {
+    "build": "tsdown",
+    "test": "bun test"
   },
-  "peerDependencies": {
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "tsdown": "^0.18.3",
     "typescript": "^5"
   }
 }
