@@ -7,7 +7,7 @@ import {
 } from "./duration";
 import { LOG_LEVELS, type ILogger, type ITimer, type LogLevel } from "./common";
 
-// Minimal interface for writable streams (compatible with NodeJS.WriteStream)
+/** Minimal writable stream interface (compatible with NodeJS.WriteStream). */
 export interface WriteStream {
   write(chunk: string): unknown;
 }
@@ -48,13 +48,28 @@ function captureNativeStack(): string {
   return lines.slice(1).join("\n");
 }
 
+/** Configuration options for creating a Logger instance. */
 export interface LoggerOptions {
+  /** Minimum log level to output. Defaults to "info". */
   logLevel?: LogLevel;
+  /** Module name shown in log prefix. */
   module?: string;
+  /** Output stream for debug/info logs. Defaults to process.stdout. */
   stdout?: WriteStream;
+  /** Output stream for warn/error/fatal logs. Defaults to process.stderr. */
   stderr?: WriteStream;
 }
 
+/**
+ * A configurable logger with module tagging, colored output, and timer support.
+ *
+ * @example
+ * ```ts
+ * const logger = new Logger({ module: "api", logLevel: "debug" });
+ * logger.info("Server started", { port: 3000 });
+ * logger.error("Request failed", new Error("timeout"));
+ * ```
+ */
 export class Logger implements ILogger {
   private logLevel: LogLevel;
   private module: string;
@@ -161,6 +176,12 @@ export class Logger implements ILogger {
     }
   }
 
+  /**
+   * Log a message at the specified level.
+   * @param level - Log level (debug, info, warn, error, fatal)
+   * @param message - Primary message or value to log
+   * @param args - Additional values to log
+   */
   log(level: LogLevel, message: any, ...args: any[]): void {
     if (LOG_LEVELS.indexOf(level) < LOG_LEVELS.indexOf(this.logLevel)) return;
 
@@ -199,47 +220,60 @@ export class Logger implements ILogger {
     }
   }
 
+  /** Log at debug level. */
   logDebug(message: any, ...args: any[]): void {
     this.log("debug", message, ...args);
   }
 
+  /** Log at info level. */
   logInfo(message: any, ...args: any[]): void {
     this.log("info", message, ...args);
   }
 
+  /** Log at warn level. */
   logWarn(message: any, ...args: any[]): void {
     this.log("warn", message, ...args);
   }
 
+  /** Log at error level. Includes stack traces for Error objects. */
   logError(message: any, ...args: any[]): void {
     this.log("error", message, ...args);
   }
 
+  /** Log at fatal level and exit the process. */
   logFatal(message: any, ...args: any[]): void {
     this.log("fatal", message, ...args);
   }
 
-  // Short aliases
+  /** Alias for {@link logDebug}. */
   debug(message: any, ...args: any[]): void {
     this.logDebug(message, ...args);
   }
 
+  /** Alias for {@link logInfo}. */
   info(message: any, ...args: any[]): void {
     this.logInfo(message, ...args);
   }
 
+  /** Alias for {@link logWarn}. */
   warn(message: any, ...args: any[]): void {
     this.logWarn(message, ...args);
   }
 
+  /** Alias for {@link logError}. */
   error(message: any, ...args: any[]): void {
     this.logError(message, ...args);
   }
 
+  /** Alias for {@link logFatal}. */
   fatal(message: any, ...args: any[]): void {
     this.logFatal(message, ...args);
   }
 
+  /**
+   * Change the minimum log level at runtime.
+   * @throws Error if level is invalid
+   */
   setLogLevel(level: LogLevel): void {
     if (!LOG_LEVELS.includes(level)) {
       throw new Error(
@@ -249,16 +283,26 @@ export class Logger implements ILogger {
     this.logLevel = level;
   }
 
+  /** Change the module name shown in log prefix. */
   setModule(module: string): void {
     this.module = module;
     this.moduleColor = this.computeModuleColor();
   }
 
+  /**
+   * Create a timer that prepends elapsed time to log messages.
+   * @example
+   * ```ts
+   * const timer = logger.timer();
+   * // ... do work ...
+   * timer.info("Operation complete"); // [1.2s] Operation complete
+   * ```
+   */
   timer(options?: TimerOptions): ITimer {
     return new Timer(this, options);
   }
 
-  // Format a duration tag for timer logs
+  /** @internal Format a duration tag for timer logs. */
   formatDurationTag(durationStr: string): string {
     return this.colorize(`[${durationStr}]`, COLORS.blue);
   }

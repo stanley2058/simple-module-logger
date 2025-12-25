@@ -1,6 +1,16 @@
+/**
+ * Duration format style for timer output.
+ * - `raw`: Raw milliseconds (e.g., "1234ms")
+ * - `long`: Full words (e.g., "1 second, 234 milliseconds")
+ * - `short`: Abbreviated (e.g., "1 sec, 234 ms")
+ * - `narrow`: Compact (e.g., "1s 234ms")
+ * - `digital`: Clock-style (e.g., "0:01:234")
+ */
 export type TimerFormat = "raw" | "long" | "short" | "narrow" | "digital";
 
+/** Options for configuring a timer instance. */
 export interface TimerOptions {
+  /** Duration format style. Defaults to "narrow". */
   format?: TimerFormat;
 }
 
@@ -38,7 +48,7 @@ declare namespace Intl {
   }
 }
 
-// Convert milliseconds to duration object for Intl.DurationFormat
+/** @internal Convert milliseconds to duration object for Intl.DurationFormat. */
 export function msToDuration(ms: number): Intl.DurationInput {
   const hours = Math.floor(ms / 3600000);
   const minutes = Math.floor((ms % 3600000) / 60000);
@@ -47,7 +57,7 @@ export function msToDuration(ms: number): Intl.DurationInput {
   return { hours, minutes, seconds, milliseconds };
 }
 
-// Format duration based on style
+/** Format a duration in milliseconds according to the specified style. */
 export function formatDuration(ms: number, format: TimerFormat): string {
   if (format === "raw") {
     return `${Math.round(ms)}ms`;
