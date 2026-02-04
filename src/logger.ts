@@ -6,6 +6,7 @@ import {
   type TimerOptions,
 } from "./duration";
 import { LOG_LEVELS, type ILogger, type ITimer, type LogLevel } from "./common";
+import { createNullWriteStream } from "./null";
 
 /** Minimal writable stream interface (compatible with NodeJS.WriteStream). */
 export interface WriteStream {
@@ -82,8 +83,12 @@ export class Logger implements ILogger {
   constructor({
     logLevel = "info",
     module = "",
-    stdout = process.stdout,
-    stderr = process.stderr,
+    stdout = process.env.NODE_ENV === "test"
+      ? createNullWriteStream()
+      : process.stdout,
+    stderr = process.env.NODE_ENV === "test"
+      ? createNullWriteStream()
+      : process.stderr,
   }: LoggerOptions = {}) {
     if (!LOG_LEVELS.includes(logLevel)) {
       throw new Error(
