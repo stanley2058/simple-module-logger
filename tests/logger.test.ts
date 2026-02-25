@@ -25,6 +25,10 @@ function stripAnsi(str: string): string {
   return str.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+function parseJsonLine(line: string): Record<string, unknown> {
+  return JSON.parse(line) as Record<string, unknown>;
+}
+
 describe("Logger", () => {
   let stdout: ReturnType<typeof createMockStream>;
   let stderr: ReturnType<typeof createMockStream>;
@@ -137,6 +141,120 @@ describe("Logger", () => {
       logger.info("Nested:", { a: { b: { c: 123 } } });
       const output = stripAnsi(stdout.lines[0]!);
       expect(output).toContain("123");
+    });
+  });
+
+  describe("jsonl output", () => {
+    test("defaults to unified stdout stream", () => {
+      const jsonLogger = new Logger({
+        logLevel: "debug",
+        module: "Test",
+        outputFormat: "jsonl",
+        stdout,
+        stderr,
+      });
+
+      jsonLogger.debug("debug");
+      jsonLogger.warn("warn");
+      jsonLogger.error("error");
+
+      expect(stdout.lines.length).toBe(3);
+      expect(stderr.lines.length).toBe(0);
+
+      const debugLine = parseJsonLine(stdout.lines[0]!);
+      const warnLine = parseJsonLine(stdout.lines[1]!);
+      const errorLine = parseJsonLine(stdout.lines[2]!);
+
+      expect(debugLine["level"]).toBe("debug");
+      expect(warnLine["level"]).toBe("warn");
+      expect(errorLine["level"]).toBe("error");
+    });
+
+    test("includes structured fields", () => {
+      const jsonLogger = new Logger({
+        logLevel: "debug",
+        module: "Test",
+        outputFormat: "jsonl",
+        stdout,
+        stderr,
+      });
+
+      jsonLogger.info("Server started", { port: 3000 }, 42);
+
+      const line = parseJsonLine(stdout.lines[0]!);
+      expect(line["timestamp"]).toEqual(expect.any(String));
+      expect(line["level"]).toBe("info");
+      expect(line["module"]).toBe("Test");
+      expect(line["message"]).toBe("Server started");
+
+      const args = line["args"] as unknown[];
+      expect(Array.isArray(args)).toBe(true);
+      expect(args[0]).toEqual({ port: 3000 });
+      expect(args[1]).toBe(42);
+    });
+
+    test("preserves repeated object references that are not circular", () => {
+      const jsonLogger = new Logger({
+        logLevel: "debug",
+        outputFormat: "jsonl",
+        stdout,
+        stderr,
+      });
+
+      const context = { traceId: "abc123" };
+      jsonLogger.info("request", context, context);
+
+      const line = parseJsonLine(stdout.lines[0]!);
+      const args = line["args"] as unknown[];
+      expect(args[0]).toEqual({ traceId: "abc123" });
+      expect(args[1]).toEqual({ traceId: "abc123" });
+      expect(args[1]).not.toBe("[Circular]");
+    });
+
+    test("can keep split stdout/stderr routing when configured", () => {
+      const jsonLogger = new Logger({
+        logLevel: "debug",
+        outputFormat: "jsonl",
+        jsonlSplitStreams: true,
+        stdout,
+        stderr,
+      });
+
+      jsonLogger.info("to stdout");
+      jsonLogger.error("to stderr");
+
+      expect(stdout.lines.length).toBe(1);
+      expect(stderr.lines.length).toBe(1);
+      expect(parseJsonLine(stdout.lines[0]!)["level"]).toBe("info");
+      expect(parseJsonLine(stderr.lines[0]!)["level"]).toBe("error");
+    });
+
+    test("includes structured error details", () => {
+      const jsonLogger = new Logger({
+        logLevel: "debug",
+        outputFormat: "jsonl",
+        stdout,
+        stderr,
+      });
+
+      const inner = new Error("Inner error");
+      const outer = new Error("Outer error");
+      outer.cause = inner;
+
+      jsonLogger.error("Operation failed", outer);
+
+      const line = parseJsonLine(stdout.lines[0]!);
+      expect(line["level"]).toBe("error");
+      expect(line["message"]).toBe("Operation failed");
+
+      const errors = line["errors"] as Array<Record<string, unknown>>;
+      expect(Array.isArray(errors)).toBe(true);
+      expect(errors[0]?.["message"]).toBe("Outer error");
+
+      const causes = errors[0]?.["causes"] as Array<Record<string, unknown>>;
+      expect(Array.isArray(causes)).toBe(true);
+      expect(causes[0]?.["message"]).toBe("Inner error");
+      expect(line["nativeStack"]).toEqual(expect.any(String));
     });
   });
 
@@ -293,6 +411,32 @@ describe("Timer", () => {
     expect(output).toContain("bar");
     expect(output).toContain("nested");
   });
+
+  test("timer emits structured duration in jsonl mode", async () => {
+    const jsonLogger = new Logger({
+      logLevel: "debug",
+      module: "Test",
+      outputFormat: "jsonl",
+      stdout,
+      stderr,
+    });
+    const timer = jsonLogger.timer({ format: "raw" });
+
+    await Bun.sleep(10);
+    timer.info("Task done", { ok: true });
+
+    expect(stderr.lines.length).toBe(0);
+    expect(stdout.lines.length).toBe(1);
+
+    const line = parseJsonLine(stdout.lines[0]!);
+    expect(line["level"]).toBe("info");
+    expect(line["message"]).toBe("Task done");
+    expect(line["duration"]).toMatch(/^\d+ms$/);
+    expect(line["durationMs"]).toEqual(expect.any(Number));
+
+    const args = line["args"] as unknown[];
+    expect(args[0]).toEqual({ ok: true });
+  });
 });
 
 describe("Edge cases", () => {
@@ -326,6 +470,14 @@ describe("Edge cases", () => {
       expect(() => {
         new Logger({ logLevel: "invalid" as any, stdout, stderr });
       }).toThrow("debug, info, warn, error, fatal");
+    });
+  });
+
+  describe("invalid output format", () => {
+    test("throws on invalid output format", () => {
+      expect(() => {
+        new Logger({ outputFormat: "xml" as any, stdout, stderr });
+      }).toThrow('Invalid output format: "xml"');
     });
   });
 

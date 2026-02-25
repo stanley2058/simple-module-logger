@@ -15,6 +15,14 @@ export interface WriteStream {
 
 // Stream routing: debug/info -> stdout, warn/error/fatal -> stderr
 const STDOUT_LEVELS: LogLevel[] = ["debug", "info"];
+const OUTPUT_FORMATS = ["text", "jsonl"] as const;
+
+export type LoggerOutputFormat = (typeof OUTPUT_FORMATS)[number];
+
+interface JsonLogContext {
+  duration?: string;
+  durationMs?: number;
+}
 
 // Extract error message from an Error object
 function formatErrorMessage(error: Error): string {
@@ -55,9 +63,30 @@ export interface LoggerOptions {
   logLevel?: LogLevel;
   /** Module name shown in log prefix. */
   module?: string;
-  /** Output stream for debug/info logs. Defaults to process.stdout. */
+  /**
+   * Output format for each log line.
+   * - "text": human-readable output with colors and prefixes
+   * - "jsonl": newline-delimited JSON records for log ingestion
+   *
+   * Defaults to "text".
+   */
+  outputFormat?: LoggerOutputFormat;
+  /**
+   * Stream routing behavior for "jsonl" output.
+   *
+   * Defaults to false, which writes all levels to stdout as one unified stream.
+   * Set to true to keep split routing (debug/info -> stdout, warn/error/fatal -> stderr).
+   */
+  jsonlSplitStreams?: boolean;
+  /**
+   * Output stream for debug/info logs in text mode.
+   * In jsonl mode this is the default unified stream for all levels.
+   */
   stdout?: WriteStream;
-  /** Output stream for warn/error/fatal logs. Defaults to process.stderr. */
+  /**
+   * Output stream for warn/error/fatal logs in text mode.
+   * In jsonl mode this is used only when jsonlSplitStreams is true.
+   */
   stderr?: WriteStream;
 }
 
@@ -79,10 +108,14 @@ export class Logger implements ILogger {
   private moduleColor: string;
   private stdout: WriteStream;
   private stderr: WriteStream;
+  private outputFormat: LoggerOutputFormat;
+  private jsonlSplitStreams: boolean;
 
   constructor({
     logLevel = "info",
     module = "",
+    outputFormat = "text",
+    jsonlSplitStreams = false,
     stdout = process.env.NODE_ENV === "test"
       ? createNullWriteStream()
       : process.stdout,
@@ -95,8 +128,15 @@ export class Logger implements ILogger {
         `Invalid log level: "${logLevel}". Valid levels: ${LOG_LEVELS.join(", ")}`,
       );
     }
+    if (!OUTPUT_FORMATS.includes(outputFormat)) {
+      throw new Error(
+        `Invalid output format: "${outputFormat}". Valid formats: ${OUTPUT_FORMATS.join(", ")}`,
+      );
+    }
     this.logLevel = logLevel;
     this.module = module;
+    this.outputFormat = outputFormat;
+    this.jsonlSplitStreams = jsonlSplitStreams;
     this.stdout = stdout;
     this.stderr = stderr;
     this.useColor = this.detectColorSupport();
@@ -156,8 +196,104 @@ export class Logger implements ILogger {
 
   // Write a line to the appropriate stream
   private writeLine(level: LogLevel, message: string): void {
-    const stream = STDOUT_LEVELS.includes(level) ? this.stdout : this.stderr;
+    const useUnifiedJsonStream =
+      this.outputFormat === "jsonl" && !this.jsonlSplitStreams;
+    const stream = useUnifiedJsonStream
+      ? this.stdout
+      : STDOUT_LEVELS.includes(level)
+        ? this.stdout
+        : this.stderr;
     stream.write(message + "\n");
+  }
+
+  private serializeError(error: Error): Record<string, unknown> {
+    const details: Record<string, unknown> = {
+      name: error.name || "Error",
+      message: formatErrorMessage(error),
+    };
+    if (error.stack) {
+      details["stack"] = error.stack;
+    }
+
+    const causes = getErrorCauses(error);
+    if (causes.length > 0) {
+      details["causes"] = causes.map((cause) => ({
+        name: cause.name || "Error",
+        message: formatErrorMessage(cause),
+        stack: cause.stack,
+      }));
+    }
+
+    return details;
+  }
+
+  private stringifyJsonRecord(record: Record<string, unknown>): string {
+    const recordBuilder = this;
+    const ancestors: object[] = [];
+    return JSON.stringify(record, function (this: unknown, _key, value: unknown): unknown {
+      if (value instanceof Error) {
+        return recordBuilder.serializeError(value);
+      }
+      if (typeof value === "bigint") {
+        return value.toString();
+      }
+      if (typeof value === "function" || typeof value === "symbol") {
+        return inspect(value, { depth: 1, colors: false });
+      }
+      if (typeof value === "undefined") {
+        return null;
+      }
+      if (typeof value === "object" && value !== null) {
+        while (
+          ancestors.length > 0 &&
+          ancestors[ancestors.length - 1] !== this &&
+          this !== undefined
+        ) {
+          ancestors.pop();
+        }
+        if (ancestors.includes(value)) {
+          return "[Circular]";
+        }
+        ancestors.push(value);
+      }
+      return value;
+    });
+  }
+
+  private buildJsonRecord(
+    level: LogLevel,
+    message: unknown,
+    args: unknown[],
+    context?: JsonLogContext,
+  ): Record<string, unknown> {
+    const record: Record<string, unknown> = {
+      timestamp: new Date().toISOString(),
+      level,
+      message,
+    };
+
+    if (this.module) {
+      record["module"] = this.module;
+    }
+    if (args.length > 0) {
+      record["args"] = args;
+    }
+    if (context?.duration !== undefined) {
+      record["duration"] = context.duration;
+    }
+    if (context?.durationMs !== undefined) {
+      record["durationMs"] = context.durationMs;
+    }
+
+    if (level === "error" || level === "fatal") {
+      const errors = [message, ...args].filter((v): v is Error => v instanceof Error);
+      if (errors.length > 0) {
+        record["errors"] = errors.map((error) => this.serializeError(error));
+      }
+      record["nativeStack"] = captureNativeStack();
+    }
+
+    return record;
   }
 
   // Log error cause chain as separate lines
@@ -188,7 +324,41 @@ export class Logger implements ILogger {
    * @param args - Additional values to log
    */
   log(level: LogLevel, message: any, ...args: any[]): void {
+    this.logInternal(level, message, args);
+  }
+
+  /** @internal */
+  isJsonlOutput(): boolean {
+    return this.outputFormat === "jsonl";
+  }
+
+  /** @internal */
+  logWithContext(
+    level: LogLevel,
+    message: unknown,
+    args: unknown[],
+    context?: JsonLogContext,
+  ): void {
+    this.logInternal(level, message, args, context);
+  }
+
+  private logInternal(
+    level: LogLevel,
+    message: unknown,
+    args: unknown[],
+    context?: JsonLogContext,
+  ): void {
     if (LOG_LEVELS.indexOf(level) < LOG_LEVELS.indexOf(this.logLevel)) return;
+
+    if (this.outputFormat === "jsonl") {
+      const jsonRecord = this.buildJsonRecord(level, message, args, context);
+      this.writeLine(level, this.stringifyJsonRecord(jsonRecord));
+
+      if (level === "fatal") {
+        process.exit(1);
+      }
+      return;
+    }
 
     const prefix = this.buildPrefix(level);
     const formattedMessage = this.formatValue(message);
@@ -324,9 +494,14 @@ class Timer implements ITimer {
     this.format = options?.format ?? "narrow";
   }
 
-  private prependDurationTag(message: any): string {
+  private getElapsedDuration(): { elapsedMs: number; formatted: string } {
     const elapsed = performance.now() - this.startTime;
     const formatted = formatDuration(elapsed, this.format);
+    return { elapsedMs: elapsed, formatted };
+  }
+
+  private prependDurationTag(message: any): string {
+    const { formatted } = this.getElapsedDuration();
     const durationTag = this.logger.formatDurationTag(formatted);
     // Use inspect for objects to avoid [object Object]
     const messageStr =
@@ -337,6 +512,14 @@ class Timer implements ITimer {
   }
 
   log(level: LogLevel, message: any, ...args: any[]): void {
+    if (this.logger.isJsonlOutput()) {
+      const { elapsedMs, formatted } = this.getElapsedDuration();
+      this.logger.logWithContext(level, message, args, {
+        duration: formatted,
+        durationMs: Math.round(elapsedMs),
+      });
+      return;
+    }
     this.logger.log(level, this.prependDurationTag(message), ...args);
   }
 
